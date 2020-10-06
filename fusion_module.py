@@ -46,13 +46,13 @@ def qkv_attention(query, key, value, mask=None, dropout=None):
     if dropout is not None:
         p_attn = dropout(p_attn)
 
-    return torch.matmul(p_attn, value), p_attn
+    return torch.matmul(p_attn, value), p_attn  ##这个函数没对value转置，可能传进来已经转置了
 
 class SummaryAttn(nn.Module):
 
 	def __init__(self, dim, num_attn, dropout, is_cat=False):
 		super(SummaryAttn, self).__init__()
-		self.linear = nn.Sequential(
+		self.linear = nn.Sequential(             ## 将按照在构造函数中传递的顺序添加到模块中
 				nn.Linear(dim, dim),
 				nn.ReLU(inplace=True),
 				nn.Linear(dim, num_attn),
@@ -65,12 +65,12 @@ class SummaryAttn(nn.Module):
 	def forward(self, query, value, mask=None):
 		if mask is not None:
 			mask = mask.unsqueeze(-2)
-		batch = query.size(0)
+		batch = query.size(0)  ##取出query的第一维度
 
 		weighted, self.attn = sum_attention(self.linear, query, value, mask=mask, dropout=self.dropout)
 		weighted = weighted if self.is_cat else weighted.mean(dim=-2)
 
-		return weighted
+		return weighted  ##返回 公式（3）输出
 
 class CrossAttention(nn.Module):
     """ TBD...
@@ -111,12 +111,12 @@ class CrossAttention(nn.Module):
             v1 = v1.squeeze(0)
 
 
-        k1 = self.img_key_fc(v1)
-        k2 = self.txt_key_fc(v2)
-        batch_size_v1 = v1.size(0)
-        batch_size_v2 = v2.size(0)
+        k1 = self.img_key_fc(v1) ##对图像区域做线性变换公式（1）
+        k2 = self.txt_key_fc(v2)  ##对words做线性变换公式（1）
+        batch_size_v1 = v1.size(0)  ##取出第一维，区域数量
+        batch_size_v2 = v2.size(0)   ##取出第二维，word数量
 
-        v1 = v1.unsqueeze(1).expand(-1, batch_size_v2, -1, -1)
+        v1 = v1.unsqueeze(1).expand(-1, batch_size_v2, -1, -1)  ##先在v1的第1维增加一个维度，比如原来是（2,3,1），现在变为（2,1,3,1）
         k1 = k1.unsqueeze(1).expand(-1, batch_size_v2, -1, -1)
         v2 = v2.unsqueeze(0).expand(batch_size_v1, -1, -1, -1)
         k2 = k2.unsqueeze(0).expand(batch_size_v1, -1, -1, -1)
