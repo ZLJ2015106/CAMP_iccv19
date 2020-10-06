@@ -23,25 +23,25 @@ def l2norm(X, dim=-1, eps=1e-8):
     """L2-normalize columns of X
     """
     norm = torch.pow(X, 2).sum(dim=dim, keepdim=True).sqrt() + eps
-    X = torch.div(X, norm)
+    X = torch.div(X, norm)  
     return X
 
 
 def sum_attention(nnet, query, value, mask=None, dropout=None):
-    scores = nnet(query).transpose(-2, -1)
+    scores = nnet(query).transpose(-2, -1)   ##对区域-文字亲和矩阵进行转置
     if mask is not None:
-        scores.data.masked_fill_(mask.data.eq(0), -1e9)
-    p_attn = F.softmax(scores, dim=-1)
+        scores.data.masked_fill_(mask.data.eq(0), -1e9) ## mask==0的地方，对scores中相应位置用-1e9替代，scores中其他值保持不变
+    p_attn = F.softmax(scores, dim=-1)  ## dim = 1与dim = -1都是按行计算softmax，dim = 0是按列计算
     if dropout is not None:
         p_attn = dropout(p_attn)
-    return torch.matmul(p_attn, value), p_attn
+    return torch.matmul(p_attn, value), p_attn  
 
 
 def qkv_attention(query, key, value, mask=None, dropout=None):
-    d_k = query.size(-1)
-    scores = torch.matmul(query, key.transpose(-2, -1)) / sqrt(d_k)
+    d_k = query.size(-1)  ## size用来统计矩阵元素个数，或矩阵某一维上的元素个数的函数
+    scores = torch.matmul(query, key.transpose(-2, -1)) / sqrt(d_k)  ## 计算公式（3）
     if mask is not None:
-        scores.data.masked_fill_(mask.data.eq(0), -1e9)
+        scores.data.masked_fill_(mask.data.eq(0), -1e9)   ##在mask值为0的位置处用-1e9填充。mask的元素个数需和本tensor相同，但尺寸可以不同
     p_attn = F.softmax(scores, dim=-1)
     if dropout is not None:
         p_attn = dropout(p_attn)
