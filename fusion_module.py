@@ -105,27 +105,27 @@ class CrossAttention(nn.Module):
 
     def forward(self, v1, v2, get_score=True, keep=None, mask=None):
         if keep == "words":
-            v2 = v2.squeeze(0)
+            v2 = v2.squeeze(0)## 只能压缩维度为1的维
             mask = mask.squeeze(0)
         elif keep == "regions":
-            v1 = v1.squeeze(0)
+            v1 = v1.squeeze(0) 
 
 
         k1 = self.img_key_fc(v1) ##对图像区域做线性变换公式（1）
         k2 = self.txt_key_fc(v2)  ##对words做线性变换公式（1）
         batch_size_v1 = v1.size(0)  ##取出第一维，区域数量
-        batch_size_v2 = v2.size(0)   ##取出第二维，word数量
+        batch_size_v2 = v2.size(0)   ##取出第一维，word数量
 
-        v1 = v1.unsqueeze(1).expand(-1, batch_size_v2, -1, -1)  ##先在v1的第1维增加一个维度，比如原来是（2,3,1），现在变为（2,1,3,1）
-        k1 = k1.unsqueeze(1).expand(-1, batch_size_v2, -1, -1)
-        v2 = v2.unsqueeze(0).expand(batch_size_v1, -1, -1, -1)
+        v1 = v1.unsqueeze(1).expand(-1, batch_size_v2, -1, -1)  ##先在区域级图像v1的第1维增加一个维度，比如原来是（2,3,1），现在变为（2,1,3,1） 通道数目原来是1，expand将通道数目扩展为batch_size_v2个
+        k1 = k1.unsqueeze(1).expand(-1, batch_size_v2, -1, -1)  
+        v2 = v2.unsqueeze(0).expand(batch_size_v1, -1, -1, -1)   ##word的batch设置与imag的batch相同
         k2 = k2.unsqueeze(0).expand(batch_size_v1, -1, -1, -1)
 
-        weighted_v1, attn_1 = qkv_attention(k2, k1, v1)
+        weighted_v1, attn_1 = qkv_attention(k2, k1, v1)  ##求出公式（3）视觉在文本维度下的表示 da×1
         if mask is not None:
             weighted_v2, attn_2 = qkv_attention(k1, k2, v2, mask.unsqueeze(-2))
         else:
-            weighted_v2, attn_2 = qkv_attention(k1, k2, v2)
+            weighted_v2, attn_2 = qkv_attention(k1, k2, v2)  ##求出公式（4）文本在视觉维度下的表示 dv×1
 
         fused_v1 = weighted_v2
         fused_v2 = weighted_v1
@@ -152,7 +152,7 @@ class CrossAttention(nn.Module):
             return torch.cat((co_v1, co_v2), dim=-1)
 
 
-class GatedFusion(nn.Module):
+class GatedFusion(nn.Module):  ## 又把CrossAttention网络中的内容计算了一遍，实现了所有功能，所以只要有这个网络可以直接计算最终的匹配得分
     def __init__(self, dim, num_attn, dropout=0.01, reduce_func="self_attn", fusion_func="concat"):
         super(GatedFusion, self).__init__()
         self.dim = dim
@@ -178,17 +178,17 @@ class GatedFusion(nn.Module):
         self.fc_1 = nn.Sequential(
                         nn.Linear(in_dim, dim),
                         nn.ReLU(inplace=True),
-                        nn.Dropout(p=dropout),)
+                        nn.Dropout(p=dropout),)   ##公式（6）中的Fv，由线性层和非线性激活函数组成的可学习变换
         self.fc_2 = nn.Sequential(
                         nn.Linear(in_dim, dim),
                         nn.ReLU(inplace=True),
-                        nn.Dropout(p=dropout),)
+                        nn.Dropout(p=dropout),)   ##公式（6）中的Fv，由线性层和非线性激活函数组成的可学习变换
         self.fc_out = nn.Sequential(
                         nn.Linear(in_dim, dim),
                         nn.ReLU(inplace=True),
                         nn.Dropout(p=dropout),
                         nn.Linear(dim, 1),
-                        nn.Sigmoid(),
+                        nn.Sigmoid(),    ## 最后融合，预测之前对融合结果做一次MLP
                         )
 
         if reduce_func == "mean":
@@ -218,7 +218,7 @@ class GatedFusion(nn.Module):
 
     def forward(self, v1, v2, get_score=True, keep=None, mask=None):
         if keep == "words":
-            v2 = v2.squeeze(0)
+            v2 = v2.squeeze(0) 
             mask = mask.squeeze(0)
         elif keep == "regions":
             v1 = v1.squeeze(0)
@@ -240,19 +240,19 @@ class GatedFusion(nn.Module):
         else:
             weighted_v2, attn_2 = qkv_attention(k1, k2, v2)
   
-        gate_v1 = F.sigmoid((v1 * weighted_v2).sum(dim=-1)).unsqueeze(-1)
-        gate_v2 = F.sigmoid((v2 * weighted_v1).sum(dim=-1)).unsqueeze(-1)
+        gate_v1 = F.sigmoid((v1 * weighted_v2).sum(dim=-1)).unsqueeze(-1)  ##生成门值G,并按行求和维数减1，最后再增加最后一维，变成和原来维数一样，因为后面要做对应元素相乘，248行
+        gate_v2 = F.sigmoid((v2 * weighted_v1).sum(dim=-1)).unsqueeze(-1)  ##增加维数，只是改变形状，tensor数据量不变，数据值不变
         #gate_v1 = F.sigmoid((v1 * weighted_v2))
         #gate_v2 = F.sigmoid((v2 * weighted_v1))
-        if self.fusion_func == "sum": 
+        if self.fusion_func == "sum":   ##fusion_func 表示基本的融合形式，就是怎么把学习到的两种模态的关系放在一起，这里一种是原始信息和获取信息求和，一种是直接串联
             fused_v1 = (v1 + weighted_v2)* gate_v1
             fused_v2 = (v2 + weighted_v1)* gate_v2
         elif self.fusion_func == "concat":
-            fused_v1 = torch.cat((v1, weighted_v2), dim=-1)* gate_v1
+            fused_v1 = torch.cat((v1, weighted_v2), dim=-1)* gate_v1  
             fused_v2 = torch.cat((v2, weighted_v1), dim=-1)* gate_v2
 
-        co_v1 = self.fc_1(fused_v1) + v1
-        co_v2 = self.fc_2(fused_v2) + v2
+        co_v1 = self.fc_1(fused_v1) + v1  ##公式6
+        co_v2 = self.fc_2(fused_v2) + v2  ##公式6
 
         if self.reduce_func == "self_attn":
             co_v1 = self.reduce_layer_1(co_v1, co_v1)
@@ -260,8 +260,8 @@ class GatedFusion(nn.Module):
             #co_v1 = l2norm(co_v1)
             #co_v2 = l2norm(co_v2)
         else:
-            co_v1 = self.reduce_func(co_v1, dim=-2)
-            co_v2 = self.reduce_func(co_v2, dim=-2)
+            co_v1 = self.reduce_func(co_v1, dim=-2)  ##reduce_func这个函数的作用是？
+            co_v2 = self.reduce_func(co_v2, dim=-2)   
             co_v1 = l2norm(co_v1)
             co_v2 = l2norm(co_v2)
 
@@ -269,7 +269,7 @@ class GatedFusion(nn.Module):
             if self.fusion_func == "sum":
                  score = self.fc_out(co_v1 + co_v2).squeeze(dim=-1)
             elif self.fusion_func == "concat":
-                 score = self.fc_out(torch.cat((co_v1, co_v2), dim=-1)).squeeze(dim=-1)
+                 score = self.fc_out(torch.cat((co_v1, co_v2), dim=-1)).squeeze(dim=-1)  ##得到图像文本的matching——score
             if keep == "regions":
                 score = score.transpose(0, 1)
             #mean_gate = gate_v1.mean(dim=-1).mean(dim=-1) + gate_v2.mean(dim=-1).mean(dim=-1)
@@ -329,12 +329,12 @@ class CrossAttentionNew(nn.Module):
 
         k1 = self.img_key_fc(v1)
         k2 = self.txt_key_fc(v2)
-        q1 = self.img_query_fc(v1)
-        q2 = self.txt_query_fc(v2)
+        q1 = self.img_query_fc(v1) ##q1=k1
+        q2 = self.txt_query_fc(v2)  ##q2=k2
         batch_size_v1 = v1.size(0)
         batch_size_v2 = v2.size(0)
 
-        v1 = v1.unsqueeze(1).expand(-1, batch_size_v2, -1, -1)
+        v1 = v1.unsqueeze(1).expand(-1, batch_size_v2, -1, -1)  
         k1 = k1.unsqueeze(1).expand(-1, batch_size_v2, -1, -1)
         q1 = q1.unsqueeze(1).expand(-1, batch_size_v2, -1, -1)
         v2 = v2.unsqueeze(0).expand(batch_size_v1, -1, -1, -1)
@@ -374,7 +374,7 @@ class CrossAttentionNew(nn.Module):
             co_v2 = l2norm(co_v2)
 
         if get_score:
-            score = (co_v1 * co_v2).sum(dim=-1)
+            score = (co_v1 * co_v2).sum(dim=-1)  ##分数是对应相乘 然后按行求和
             if keep == "regions":
                 score = score.transpose(0, 1)
             return score
@@ -485,8 +485,8 @@ class GatedFusionNew(nn.Module):
 
         k1 = self.img_key_fc(v1)
         k2 = self.txt_key_fc(v2)
-        q1 = self.img_query_fc(v1)
-        q2 = self.txt_query_fc(v2)
+        q1 = self.img_query_fc(v1)  ## q1 = k1
+        q2 = self.txt_query_fc(v2)  ## q2 = k2
         batch_size_v1 = v1.size(0)
         batch_size_v2 = v2.size(0)
 
@@ -497,7 +497,7 @@ class GatedFusionNew(nn.Module):
         k2 = k2.unsqueeze(0).expand(batch_size_v1, -1, -1, -1)
         q2 = q2.unsqueeze(0).expand(batch_size_v1, -1, -1, -1)
 
-        weighted_v1, attn_1 = qkv_attention(q2, k1, v1)
+        weighted_v1, attn_1 = qkv_attention(q2, k1, v1)  ## 又把cross关系重新计算，所以只要有这个网络就能实现全部框架
         if mask is not None:
             weighted_v2, attn_2 = qkv_attention(q1, k2, v2, mask.unsqueeze(-2))
         else:
@@ -506,7 +506,7 @@ class GatedFusionNew(nn.Module):
         weighted_v2_q = self.weighted_txt_query_fc(weighted_v2)
         weighted_v2_k = self.weighted_txt_key_fc(weighted_v2)
 
-        weighted_v1_q = self.weighted_img_query_fc(weighted_v1)
+        weighted_v1_q = self.weighted_img_query_fc(weighted_v1)  ##把qkv得到的分数做了一次线性映射
         weighted_v1_k = self.weighted_img_key_fc(weighted_v1)
 
 
