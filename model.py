@@ -1,23 +1,23 @@
 import torch
 import torch.nn as nn
-import torch.distributed as dist
-import torch.nn.init
-import torchvision.models as models
-from torch.autograd import Variable
-from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
-from torch.nn.utils.clip_grad import clip_grad_norm
+import torch.distributed as dist  ## 分布式通信，可以做分布式训练，多线程多节点训练
+import torch.nn.init  ## 参数初始化
+import torchvision.models as models ## pytorch中集成的经典模型，resnet等
+from torch.autograd import Variable  ## 图的自动求导机制
+from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence  ## 填充序列，使序列对齐
+from torch.nn.utils.clip_grad import clip_grad_norm ## 根据参数的范数裁剪梯度
 import numpy as np
 from collections import OrderedDict
 
 #from transformer.Models import Encoder as self_attention_encoder
 #from transformer.Layers import EncoderLayer as attention_layer
-from resnet import *
+from resnet import * 
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 
-import logging
-import torch.backends.cudnn as cudnn
-import pickle
+import logging ## 用于输出运行日志
+import torch.backends.cudnn as cudnn ## 控制是否使用非确定性算法
+import pickle ## 加载pkl格式的数据文件
 from fusion_module import *
 
 max_length = 47
@@ -47,19 +47,19 @@ def EncoderImage(data_name, img_dim, embed_size, finetune=False,
 
 
 
-class ImageSelfAttention(nn.Module):
+class ImageSelfAttention(nn.Module):   ## 自注意力机制用于CNN特征图
     """ Self-attention module for CNN's feature map.
     Inspired by: Zhang et al., 2018 The self-attention mechanism in SAGAN.
     """
     def __init__(self, planes):
         super(ImageSelfAttention, self).__init__()
         inner = planes // 8
-        self.conv_f = nn.Conv1d(planes, inner, kernel_size=1, bias=False)
+        self.conv_f = nn.Conv1d(planes, inner, kernel_size=1, bias=False)  ## 定义了三个卷积层
         self.conv_g = nn.Conv1d(planes, inner, kernel_size=1, bias=False)
         self.conv_h = nn.Conv1d(planes, planes, kernel_size=1, bias=False)
     
     def forward(self, x):
-        x = x.view(x.size(0), x.size(1), -1)
+        x = x.view(x.size(0), x.size(1), -1) ## Conv1d 输入是三维的，所以要调整输入维度
         f = self.conv_f(x)
         g = self.conv_g(x)
         h = self.conv_h(x)
@@ -97,7 +97,7 @@ class EncoderImageFull(nn.Module):
             self.fc = nn.Linear(2048, embed_size)
     
         else:
-            self.fc = nn.Linear(self.cnn.fc.in_features, embed_size)
+            self.fc = nn.Linear(self.cnn.fc.in_features, embed_size) ## fc.in_features提取fc层中固定的参数
         
         self.cnn.fc = nn.Sequential()
         self.init_weights()
@@ -133,27 +133,27 @@ class EncoderImageFull(nn.Module):
 
     def forward(self, images):
         """Extract image feature vectors."""
-        features = self.cnn(images)
+        features = self.cnn(images)  ## 得到的是长向量，
 
         if self.self_attention:
             features = features.view(images.size(0), -1, 7, 7)
             features = self.attention_layer(features)
-            features = features.view(images.size(0), -1, 7, 7)
+            features = features.view(images.size(0), -1, 7, 7) ##每一个通道内的大小是7×7
             features = self.AvgPool2d(features)
 
         # linear projection to the joint embedding space
         if self.fusion:
             features = features.view(features.size(0), features.size(1), -1)
-            features = features.transpose(1, 2)
+            features = features.transpose(1, 2)   ## 使每一列表示一个完整语义向量
         else:    
-            features = features.view(features.size(0), -1)
+            features = features.view(features.size(0), -1) 
         
-        features = self.fc(features)
+        features = self.fc(features)  ## 重新定义原始网络中的全连接层
 
         # normalization in the joint embedding space
-        if not self.no_imgnorm:
+        if not self.no_imgnorm: 
             if self.fusion:
-                features = l2norm(features, dim=2)
+                features = l2norm(features, dim=2)  ## 每一个语义层向量做归一化
             else:
                 features = l2norm(features, dim=1)
 
@@ -455,17 +455,17 @@ class CAMP(object):
         self.img_enc = EncoderImage(opt.data_name, opt.img_dim, opt.embed_size,
                                     opt.finetune, opt.cnn_type,
                                     no_imgnorm=opt.no_imgnorm,
-                                    self_attention=opt.self_attention)
+                                    self_attention=opt.self_attention)  ## 图像提取特征
 
         self.txt_enc = EncoderText(opt.vocab_size, opt.word_dim,
                                    opt.embed_size, opt.num_layers,
                                    no_txtnorm=opt.no_txtnorm, 
                                    self_attention=opt.self_attention,
                                    embed_weights=opt.word_embed, 
-                                   bi_gru=opt.bi_gru)
+                                   bi_gru=opt.bi_gru)    ## 文本提取特征
 
         # Loss and Optimizer
-        if opt.cross_model:
+        if opt.cross_model:                                ## 计算loss
             self.criterion = SimLoss(margin=opt.margin,
                                              measure=opt.measure,
                                              max_violation=opt.max_violation,
@@ -475,7 +475,7 @@ class CAMP(object):
                                              measure=opt.measure,
                                              max_violation=opt.max_violation)
 
-        if torch.cuda.is_available():
+        if torch.cuda.is_available():  ## 分布式计算模块
             self.img_enc = nn.DataParallel(self.img_enc)
             self.txt_enc = nn.DataParallel(self.txt_enc)
             self.img_enc.cuda()
@@ -485,8 +485,8 @@ class CAMP(object):
                 self.criterion.sim.cuda()
             cudnn.benchmark = True
 
-        print("Encoders init OK!")
-        params = list(self.txt_enc.parameters())
+        print("Encoders init OK!")   ## 初始化编码完成
+        params = list(self.txt_enc.parameters())  ## 统计参数列表
         params += list(self.img_enc.module.fc.parameters())
         if opt.self_attention:
             params += list(self.img_enc.module.attention_layer.parameters())
@@ -523,7 +523,7 @@ class CAMP(object):
         
         self.params = params
 
-        if opt.optimizer.type == "Adam":
+        if opt.optimizer.type == "Adam":  ## 优化算法选择
             self.optimizer = torch.optim.Adam(params, lr=opt.learning_rate)
         elif opt.optimizer.type == "SGD":
             self.optimizer = torch.optim.SGD(params, lr=opt.learning_rate,
@@ -567,7 +567,7 @@ class CAMP(object):
         """switch to train mode
         """
         self.img_enc.train()
-        self.txt_enc.train()
+        self.txt_enc.train()  ## 为什么有train这个方法？？？
         if self.opt.cross_model:
             self.criterion.sim.train()
 
@@ -603,7 +603,7 @@ class CAMP(object):
         """
         loss = self.criterion(img_emb, cap_emb, mask=mask)
         loss = loss #/ self.opt.batch_size
-        self.logger.update('Le', loss.data, img_emb.size(0)) 
+        self.logger.update('Le', loss.data, img_emb.size(0))  ## 更新日志
         return loss
 
     def train_emb(self, images, captions, lengths, ids=None,
